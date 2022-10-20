@@ -1,0 +1,160 @@
+---
+title: "Longterm Assessments"
+author: "Andrew Feltmann"
+date: "10/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(lubridate)
+library(data.table)
+
+
+source("E:/2022 Integrated Report/Data Assessments/WQ-CONTINUOUS ASSESSMENTS/LONGTERM/longterm assessment work/Scripts/NWIS data pull function.R")
+
+AR_USGS_RETRIEVAL("2016-04-01","2021-03-31")
+
+```
+
+
+
+```{r}
+#temp & pH
+# data %>%
+#   summarise -> rolling count of days between samples
+#   split by gaps in data diff()
+#   calculate proportion of samples within the caclulated continuous time frame 
+#   if >90% then compare number of values that exceed vs total samples in the continuous time frames
+#   assess from there
+#   
+#DO
+# Data %>%
+#     filter by values that are in the critical season and primary season
+#     split by gaps in the data
+#     #   calculate proportion of samples within the caclulated continuous time frame 
+#   if >90% then compare number of values that exceed vs total samples in the continuous time frames
+#   assess from there
+#   
+#############
+
+sites <- read.csv("E:/2022 Integrated Report/Data Assessments/WQ-CONTINUOUS ASSESSMENTS/LONGTERM/longterm assessment work/Input/Continuous sites.csv")
+
+sites$site_no<- as.character(paste0("0",sites$StationID))
+
+sites$local <- paste0(sites$site_no, "-", sites$Description)
+
+
+local <- sites$local
+#create a dataframe here with the calculation outcomes
+
+namen<- c("Site", "Parameter","Total_Hours","Exceedances","Max_Exceedances", "Assessment")
+
+sumsite <- setnames(data.frame(matrix(ncol = 6, nrow= 0)), namen)
+
+# bact_time <- data.frame(Date = seq(as.Date("2021-01-01"),
+#                                    as.Date("2021-12-13"),
+#                                    "day")) 
+############
+for(x in local){
+dat = read.csv(paste0("E:/2022 Integrated Report/Data Assessments/WQ-CONTINUOUS ASSESSMENTS/LONGTERM/test/",x,"/", x,".csv"))
+
+dat <- dat %>%
+    tidyr::separate(Date, c("Date1", "time"), sep = " ")#we dont need 2 time columns
+
+dat$Date1 = as.Date(dat$Date1) #making Dates dates
+
+
+
+
+#template for formatting assessments
+
+
+
+
+#summarising the number of samples per day (should be 24)
+datsum <- dat %>%
+  group_by(Date1) %>%
+  summarise(count = n(), .groups = "drop") 
+
+
+
+#calculating gaps in the data 
+datsum <- datsum %>% 
+  mutate(days_btw = c(0,diff(datsum$Date1, lag = 1, na.pad = T)))
+
+#calculating where data is useable and splitting at gaps in the data
+datsum <- datsum %>%
+  mutate(useable = case_when(days_btw <= 5 ~ "Use",
+                             days_btw > 5 ~ "Split"))
+
+#creating sequential groups to designate usable time frames 
+datperiod <- datsum %>%
+  mutate(grp = data.table::rleid(useable, prefix = "grp"))
+
+#creating filter to filter out the time frames with less than 5 days in them
+save <- datperiod %>%
+  count(grp)%>%
+  filter(n >= 5)
+
+#applying filter
+datperiod <- datperiod %>% 
+  filter(grp %in% save$grp)
+
+#creating summaries for the data periods to be used in the assessment
+sumperiod <- datperiod %>%
+  group_by(grp)%>%
+  summarise(start = min(Date1),
+            end = max(Date1),
+            expdays = as.numeric(end-start+1),
+            actdays = length(Date1),
+            exphour = expdays*24,
+            acthour = sum(count),
+            perhours = (acthour/exphour)*100) 
+
+#filtere out periods with less than 90% coverage
+
+sumperiod <- sumperiod %>%
+  filter(perhours >= 90)
+
+period <- sumperiod %>%
+  select(start, end)
+
+dat <- as.data.table(dat)
+
+dat <- dat[Date1 %inrange% period]
+
+#total number of hours sampled
+tothour <- sum(sumperiod$acthour) #use for binomial calc
+
+#number of exceedances detected (example is for temp)
+exceed <- dat %>%
+  filter(Avg_Hourly_Temp > 30)%>%
+  nrow()
+
+
+binom = qbinom(0.9, size = tothour, prob = 0.1) #calculating binom dist in r
+
+
+result <- data.frame(Site = x,
+                     Parameter = "DO", 
+                     Total_Hours = tothour,
+                     Exceedances = exceed,
+                     Max_Exceedances = binom,
+                     Assessment = case_when(exceed <= binom ~ "Attain",
+                                            exceed > binom ~ "Fail"))
+
+sumsite <- sumsite %>%
+  rbind(result)
+
+}
+
+```
+
+
+```{r}
+
+
+
+```
